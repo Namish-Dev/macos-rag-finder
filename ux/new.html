@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <script>
+        window.FontAwesomeConfig = {
+          autoReplaceSvg: 'nest'
+        };
+      </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/js/all.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Finder</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      fontFamily: { sans: ['-apple-system','BlinkMacSystemFont','"SF Pro Text"','Helvetica Neue','sans-serif'] },
+      colors: {
+        macbg: '#e8e8e8',
+        chrome: '#ececec',
+        accentblue: '#0061d5',
+        traffic: { red:'#ff5f57', yellow:'#febc2e', green:'#28c840' }
+      }
+    }
+  }
+}
+</script>
+<style>
+  *{box-sizing:border-box}
+  body{background:linear-gradient(135deg,#d0d8e8 0%,#c8cfe0 100%)}
+  ::-webkit-scrollbar{width:8px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:#ccc;border-radius:4px}
+  .macwin{box-shadow:0 22px 60px -10px rgba(0,0,0,.40),0 0 0 .5px rgba(0,0,0,.14);border-radius:12px;overflow:hidden}
+
+  /* ── macOS folder SVG icon ── */
+  .mac-folder{position:relative;width:72px;height:64px;margin:0 auto;flex-shrink:0}
+  .mac-folder svg{width:72px;height:64px;display:block}
+
+  /* file icon */
+  .file-icon{width:56px;height:64px;border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;margin:0 auto;box-shadow:0 2px 6px rgba(0,0,0,.22)}
+
+  /* grid cells */
+  .item-cell{border-radius:10px;padding:10px 8px 8px;cursor:pointer;display:flex;flex-direction:column;align-items:center;transition:background .1s ease}
+  .item-cell:hover{background:rgba(0,0,0,.06)}
+  .item-cell.selected{background:#0061d5}
+  .item-cell.selected .fname{color:#fff !important}
+
+  /* toolbar segments */
+  .seg-active{background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.15);color:#111}
+
+  /* new folder modal */
+  #modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:50;align-items:center;justify-content:center}
+  #modal-overlay.show{display:flex}
+  #modal-box{background:#f5f5f7;border-radius:14px;width:340px;box-shadow:0 20px 60px rgba(0,0,0,.4);overflow:hidden}
+
+  /* rename inline */
+  .fname-input{background:rgba(0,97,213,.85);color:#fff;border:none;outline:none;border-radius:4px;font-size:12px;font-weight:500;text-align:center;width:100%;padding:1px 4px}
+</style>
+</head>
+<body class="min-h-screen font-sans antialiased flex items-center justify-center p-6">
+
+<!-- New Folder Modal -->
+<div id="modal-overlay">
+  <div id="modal-box">
+    <div class="px-6 pt-6 pb-2">
+      <div class="flex items-center space-x-3 mb-4">
+        <div class="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
+          <i class="fa-solid fa-folder-plus text-[#0061d5] text-lg"></i>
+        </div>
+        <div>
+          <p class="font-semibold text-[15px] text-gray-900">New Folder</p>
+          <p class="text-[12px] text-gray-500">Enter a name for the new folder</p>
+        </div>
+      </div>
+      <input id="new-folder-name" type="text" value="Untitled Folder" placeholder="Folder name"
+        class="w-full border border-gray-300 rounded-lg px-3 py-2 text-[13px] outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 bg-white" />
+    </div>
+    <div class="flex border-t border-gray-200 mt-4">
+      <button id="modal-cancel" class="flex-1 py-3 text-[13px] font-medium text-gray-600 hover:bg-gray-100 transition-colors">Cancel</button>
+      <div class="w-px bg-gray-200"></div>
+      <button id="modal-create" class="flex-1 py-3 text-[13px] font-semibold text-[#0061d5] hover:bg-blue-50 transition-colors">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Finder Window -->
+<div id="finder-window" class="macwin w-full max-w-[1100px] flex flex-col" style="height:72vh;min-height:500px">
+
+  <!-- Title bar -->
+  <div id="titlebar" class="h-11 bg-chrome border-b border-gray-300 flex items-center px-4 shrink-0 select-none relative">
+    <div class="flex items-center space-x-2 z-10">
+      <button class="w-3.5 h-3.5 rounded-full bg-traffic-red hover:brightness-90 transition-all" title="Close"></button>
+      <button class="w-3.5 h-3.5 rounded-full bg-traffic-yellow hover:brightness-90 transition-all" title="Minimize"></button>
+      <button class="w-3.5 h-3.5 rounded-full bg-traffic-green hover:brightness-90 transition-all" title="Maximize"></button>
+    </div>
+    <span id="window-title" class="absolute left-1/2 -translate-x-1/2 text-[13px] font-semibold text-gray-700">Documents</span>
+  </div>
+
+  <!-- Toolbar -->
+  <div id="toolbar" class="h-12 bg-chrome border-b border-gray-300 flex items-center px-4 gap-2 shrink-0">
+    <!-- Back / Forward -->
+    <button id="btn-back" class="w-7 h-7 flex items-center justify-center rounded hover:bg-black/8 text-gray-400 disabled:opacity-30 transition-colors" title="Back">
+      <i class="fa-solid fa-chevron-left text-[13px]"></i>
+    </button>
+    <button id="btn-forward" class="w-7 h-7 flex items-center justify-center rounded text-gray-300 cursor-default" title="Forward">
+      <i class="fa-solid fa-chevron-right text-[13px]"></i>
+    </button>
+
+    <!-- View mode pills -->
+    <div class="flex items-center bg-gray-200/80 rounded-lg p-0.5 ml-1">
+      <button class="seg-active px-2.5 py-1 rounded-md text-[12px] font-medium flex items-center gap-1.5">
+        <i class="fa-solid fa-grip text-[11px]"></i>Icon
+      </button>
+      <button class="px-2.5 py-1 rounded-md text-[12px] font-medium text-gray-500 hover:bg-black/5 flex items-center gap-1.5">
+        <i class="fa-solid fa-list-ul text-[11px]"></i>List
+      </button>
+      <button class="px-2.5 py-1 rounded-md text-[12px] font-medium text-gray-500 hover:bg-black/5 flex items-center gap-1.5">
+        <i class="fa-solid fa-table-columns text-[11px]"></i>Column
+      </button>
+    </div>
+
+    <!-- New Folder -->
+    <button id="btn-new-folder" class="ml-2 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accentblue text-white text-[12px] font-medium hover:bg-blue-700 transition-colors shadow-sm">
+      <i class="fa-solid fa-folder-plus text-[11px]"></i>New Folder
+    </button>
+
+    <!-- Spacer -->
+    <div class="flex-1"></div>
+
+    <!-- Sort -->
+    <button class="text-[12px] font-medium text-gray-500 hover:bg-black/5 px-2.5 py-1.5 rounded-md flex items-center gap-1.5">
+      <i class="fa-solid fa-arrow-up-wide-short text-[11px] text-gray-400"></i>Sort
+      <i class="fa-solid fa-chevron-down text-[9px] text-gray-400"></i>
+    </button>
+
+    <!-- Search -->
+    <div class="flex items-center bg-white/70 border border-gray-300 rounded-lg px-2.5 py-1.5 w-52">
+      <i class="fa-solid fa-magnifying-glass text-[11px] text-gray-400 mr-2"></i>
+      <input type="text" placeholder="Search" class="bg-transparent text-[12px] outline-none w-full placeholder-gray-400" />
+    </div>
+  </div>
+
+  <!-- Main: grid only (no sidebar) -->
+  <main class="flex-1 flex flex-col bg-white overflow-hidden">
+    <div class="flex-1 overflow-y-auto p-6">
+      <div id="file-grid" class="grid gap-1" style="grid-template-columns:repeat(auto-fill,minmax(100px,1fr))">
+        <!-- Populated by JS -->
+      </div>
+    </div>
+
+    <!-- Path bar -->
+    <div id="path-bar" class="h-7 border-t border-gray-200 bg-[#f7f7f7] flex items-center px-4 text-[11px] text-gray-400 shrink-0 gap-1 select-none"></div>
+
+    <!-- Status bar -->
+    <div class="h-8 border-t border-gray-200 bg-[#f7f7f7] flex items-center justify-between px-4 text-[11px] text-gray-500 shrink-0">
+      <span id="status-count"></span>
+      <span id="status-sel"></span>
+    </div>
+  </main>
+</div>
+
+<script>
+// ─── macOS-style folder SVG (matching the blue layered design in reference) ───
+function folderSVG(small = false) {
+  const w = small ? 56 : 72, h = small ? 50 : 64;
+  return `<svg width="${w}" height="${h}" viewBox="0 0 72 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- Folder back (darker blue) -->
+    <rect x="1" y="14" width="70" height="47" rx="7" fill="#6BAEE8"/>
+    <!-- Tab on back -->
+    <path d="M1 21 C1 14 6 10 12 10 L28 10 C32 10 34 12 36 15 L36 21 Z" fill="#6BAEE8"/>
+    <!-- Inner paper / page -->
+    <rect x="8" y="19" width="56" height="35" rx="5" fill="#E4EEF8" opacity="0.9"/>
+    <path d="M8 24 C8 19 12 19 16 19 L56 19 C60 19 64 19 64 24 L64 24 L8 24 Z" fill="#D0DEEE" opacity="0.7"/>
+    <!-- Folder front (lighter blue) -->
+    <rect x="1" y="26" width="70" height="35" rx="7" fill="#87C0F0"/>
+    <!-- Subtle shine on front -->
+    <rect x="1" y="26" width="70" height="10" rx="7" fill="white" opacity="0.08"/>
+  </svg>`;
+}
+
+// ─── Data ───
+const fsRoot = {
+  type: 'folder',
+  children: {
+    'Work Projects': { type:'folder', children: {
+      'Q1 Report.pdf':    { type:'file', ext:'PDF',  icon:'fa-file-pdf',        color:'#ef4444' },
+      'Roadmap.xlsx':     { type:'file', ext:'XLSX', icon:'fa-table',            color:'#22c55e' },
+      'Meeting Notes.txt':{ type:'file', ext:'TXT',  icon:'fa-file-lines',       color:'#94a3b8' },
+      'Design Brief.pdf': { type:'file', ext:'PDF',  icon:'fa-file-pdf',         color:'#ef4444' },
+      'Sprint Plan.pptx': { type:'file', ext:'PPTX', icon:'fa-file-powerpoint',  color:'#f97316' },
+      'Budget.xlsx':      { type:'file', ext:'XLSX', icon:'fa-table',            color:'#22c55e' },
+    }},
+    'Personal': { type:'folder', children: {
+      'Vacation.jpg':  { type:'file', ext:'JPG', icon:'fa-file-image', color:'#38bdf8' },
+      'Journal.txt':   { type:'file', ext:'TXT', icon:'fa-file-lines', color:'#94a3b8' },
+      'Recipes.pdf':   { type:'file', ext:'PDF', icon:'fa-file-pdf',   color:'#ef4444' },
+      'Wishlist.txt':  { type:'file', ext:'TXT', icon:'fa-file-lines', color:'#94a3b8' },
+    }},
+    'Design Assets': { type:'folder', children: {
+      'Icons': { type:'folder', children: {
+        'icon-set-v1.svg': { type:'file', ext:'SVG', icon:'fa-file-image', color:'#a78bfa' },
+        'icon-set-v2.svg': { type:'file', ext:'SVG', icon:'fa-file-image', color:'#a78bfa' },
+      }},
+      'Fonts': { type:'folder', children: {
+        'Inter.ttf':  { type:'file', ext:'TTF', icon:'fa-font', color:'#ec4899' },
+        'Roboto.ttf': { type:'file', ext:'TTF', icon:'fa-font', color:'#ec4899' },
+      }},
+      'Mockups.fig':    { type:'file', ext:'FIG', icon:'fa-object-group', color:'#7c3aed' },
+      'StyleGuide.pdf': { type:'file', ext:'PDF', icon:'fa-file-pdf',     color:'#ef4444' },
+    }},
+    'Archive': { type:'folder', children: {
+      '2022-backup.zip': { type:'file', ext:'ZIP', icon:'fa-file-zipper', color:'#b45309' },
+      '2023-backup.zip': { type:'file', ext:'ZIP', icon:'fa-file-zipper', color:'#b45309' },
+      'Old Contracts': { type:'folder', children: {
+        'Contract-A.pdf': { type:'file', ext:'PDF', icon:'fa-file-pdf', color:'#ef4444' },
+        'Contract-B.pdf': { type:'file', ext:'PDF', icon:'fa-file-pdf', color:'#ef4444' },
+      }},
+    }},
+    'Tax Documents': { type:'folder', children: {
+      '2022-taxes.pdf': { type:'file', ext:'PDF', icon:'fa-file-pdf', color:'#ef4444' },
+      '2023-taxes.pdf': { type:'file', ext:'PDF', icon:'fa-file-pdf', color:'#ef4444' },
+      'W2-2023.pdf':    { type:'file', ext:'PDF', icon:'fa-file-pdf', color:'#ef4444' },
+    }},
+    'Photos Backup': { type:'folder', children: {
+      'IMG_001.jpg':   { type:'file', ext:'JPG', icon:'fa-file-image', color:'#38bdf8' },
+      'IMG_002.jpg':   { type:'file', ext:'JPG', icon:'fa-file-image', color:'#38bdf8' },
+      'IMG_003.jpg':   { type:'file', ext:'JPG', icon:'fa-file-image', color:'#38bdf8' },
+      'Video-trip.mp4':{ type:'file', ext:'MP4', icon:'fa-file-video', color:'#f43f5e' },
+    }},
+    'Research': { type:'folder', children: {
+      'Paper-AI.pdf':    { type:'file', ext:'PDF',  icon:'fa-file-pdf',  color:'#ef4444' },
+      'Notes.txt':       { type:'file', ext:'TXT',  icon:'fa-file-lines',color:'#94a3b8' },
+      'References.xlsx': { type:'file', ext:'XLSX', icon:'fa-table',     color:'#22c55e' },
+    }},
+    'Resume.pdf':        { type:'file', ext:'PDF',  icon:'fa-file-pdf',        color:'#ef4444' },
+    'Budget 2024.xlsx':  { type:'file', ext:'XLSX', icon:'fa-table',           color:'#22c55e' },
+    'Notes.txt':         { type:'file', ext:'TXT',  icon:'fa-file-lines',      color:'#94a3b8' },
+    'Presentation.pptx': { type:'file', ext:'PPTX', icon:'fa-file-powerpoint', color:'#f97316' },
+  }
+};
+
+// ─── State ───
+let pathStack = [{ name:'Documents', node: fsRoot }];
+let currentNode = fsRoot;
+let selectedItem = null;
+let renamingCell = null;
+
+// ─── Render ───
+function renderGrid() {
+  const grid = document.getElementById('file-grid');
+  grid.innerHTML = '';
+  const entries = Object.entries(currentNode.children || {});
+
+  entries.forEach(([name, item]) => {
+    const cell = document.createElement('div');
+    cell.className = 'item-cell' + (name === selectedItem ? ' selected' : '');
+    cell.dataset.name = name;
+
+    if (item.type === 'folder') {
+      cell.innerHTML = `
+        <div class="mac-folder">${folderSVG()}</div>
+        <p class="fname mt-2 text-[12px] font-medium text-center text-gray-800 leading-tight w-full px-1"
+           style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:96px">${escHtml(name)}</p>`;
+      cell.addEventListener('click', e => { e.stopPropagation(); selectItem(name); });
+      cell.addEventListener('dblclick', e => { e.stopPropagation(); openFolder(name, item); });
+    } else {
+      cell.innerHTML = `
+        <div class="file-icon" style="background:${item.color}20;border:1.5px solid ${item.color}33">
+          <i class="fa-solid ${item.icon} text-[22px]" style="color:${item.color}"></i>
+          <span class="text-[8px] uppercase tracking-wide mt-1 font-semibold" style="color:${item.color}">${item.ext}</span>
+        </div>
+        <p class="fname mt-2 text-[12px] font-medium text-center text-gray-800 leading-tight w-full px-1"
+           style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:96px">${escHtml(name)}</p>`;
+      cell.addEventListener('click', e => { e.stopPropagation(); selectItem(name); });
+    }
+    grid.appendChild(cell);
+  });
+
+  // Click outside deselects
+  grid.addEventListener('click', () => { selectedItem = null; refreshSelection(); updateStatus(); });
+
+  updatePathBar();
+  updateStatus();
+  updateNav();
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function selectItem(name) {
+  selectedItem = name;
+  refreshSelection();
+  updateStatus();
+}
+
+function refreshSelection() {
+  document.querySelectorAll('.item-cell').forEach(c => {
+    const sel = c.dataset.name === selectedItem;
+    c.classList.toggle('selected', sel);
+    const fname = c.querySelector('.fname');
+    if (fname) fname.style.color = sel ? '#fff' : '';
+    // keep folder svg brightness normal
+  });
+}
+
+function openFolder(name, node) {
+  selectedItem = null;
+  pathStack.push({ name, node });
+  currentNode = node;
+  renderGrid();
+}
+
+function navigateBack() {
+  if (pathStack.length <= 1) return;
+  pathStack.pop();
+  currentNode = pathStack[pathStack.length - 1].node;
+  selectedItem = null;
+  renderGrid();
+}
+
+function navigateTo(index) {
+  pathStack = pathStack.slice(0, index + 1);
+  currentNode = pathStack[pathStack.length - 1].node;
+  selectedItem = null;
+  renderGrid();
+}
+
+function updatePathBar() {
+  const bar = document.getElementById('path-bar');
+  // also update window title
+  document.getElementById('window-title').textContent = pathStack[pathStack.length - 1].name;
+  bar.innerHTML = pathStack.map((seg, i) => {
+    const isLast = i === pathStack.length - 1;
+    const icon = i === 0 ? '<i class="fa-solid fa-house text-[10px] mr-1"></i>' : '<i class="fa-regular fa-folder text-[10px] mr-1"></i>';
+    return isLast
+      ? `<span class="text-gray-700 font-semibold flex items-center">${icon}${escHtml(seg.name)}</span>`
+      : `<span class="hover:text-gray-700 cursor-pointer flex items-center transition-colors" onclick="navigateTo(${i})">${icon}${escHtml(seg.name)}</span>
+         <i class="fa-solid fa-chevron-right text-[8px] text-gray-300 mx-1"></i>`;
+  }).join('');
+}
+
+function updateStatus() {
+  const children = Object.keys(currentNode.children || {});
+  const count = children.length;
+  document.getElementById('status-count').textContent = `${count} item${count !== 1 ? 's' : ''} · 42.3 GB available`;
+  document.getElementById('status-sel').textContent = selectedItem ? `"${selectedItem}" selected` : '';
+}
+
+function updateNav() {
+  const back = document.getElementById('btn-back');
+  if (pathStack.length <= 1) {
+    back.classList.add('opacity-30','cursor-default');
+    back.classList.remove('hover:bg-black/8');
+  } else {
+    back.classList.remove('opacity-30','cursor-default');
+    back.classList.add('hover:bg-black/8');
+  }
+}
+
+// ─── New Folder ───
+function openNewFolderModal() {
+  const overlay = document.getElementById('modal-overlay');
+  const input = document.getElementById('new-folder-name');
+  // generate unique default name
+  const base = 'Untitled Folder';
+  let name = base, n = 1;
+  while (currentNode.children && currentNode.children[name]) { name = `${base} ${++n}`; }
+  input.value = name;
+  overlay.classList.add('show');
+  setTimeout(() => { input.focus(); input.select(); }, 80);
+}
+
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('show');
+}
+
+function createFolder() {
+  const input = document.getElementById('new-folder-name');
+  let name = input.value.trim();
+  if (!name) name = 'Untitled Folder';
+  // ensure unique
+  let base = name, n = 1;
+  while (currentNode.children && currentNode.children[name]) { name = `${base} ${++n}`; }
+  if (!currentNode.children) currentNode.children = {};
+  currentNode.children[name] = { type:'folder', children:{} };
+  closeModal();
+  renderGrid();
+  // auto-select the new folder
+  selectedItem = name;
+  refreshSelection();
+  updateStatus();
+}
+
+// ─── Event listeners ───
+document.getElementById('btn-back').addEventListener('click', navigateBack);
+document.getElementById('btn-new-folder').addEventListener('click', openNewFolderModal);
+document.getElementById('modal-cancel').addEventListener('click', closeModal);
+document.getElementById('modal-create').addEventListener('click', createFolder);
+document.getElementById('new-folder-name').addEventListener('keydown', e => {
+  if (e.key === 'Enter') createFolder();
+  if (e.key === 'Escape') closeModal();
+});
+document.getElementById('modal-overlay').addEventListener('click', e => {
+  if (e.target === document.getElementById('modal-overlay')) closeModal();
+});
+
+// ─── Init ───
+renderGrid();
+</script>
+</body>
+</html>
