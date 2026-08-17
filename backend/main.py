@@ -1,14 +1,24 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header, Depends, UploadFile, File
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import os
 import jwt
 from datetime import datetime, timedelta, timezone
-from fastapi import Header, Depends
-from database import cursor , conn
-
+from database import cursor, conn
+from vector import delete_vectors_for_folder, save_vector
+from document_analyzer import get_file_type
+from extractor import extract_text
+from chunking.semantic_chunker import create_semantic_chunk
+from embedding import generate_embedding
+import chat_store
+from rag import contextualize_question, answer_question
+from vector import search_vector
+from retrieval import keyword_search, hybrid_merged
+from embedding import generate_embedding
 
 load_dotenv()
+
+
 
 app = FastAPI()
 
@@ -21,6 +31,11 @@ class LoginRequest(BaseModel):
 
 class CreateFolderRequest(BaseModel):
     title: str
+
+class AskRequest(BaseModel):
+    folder_id: int
+    session_id: int
+    question: str
 
 def create_token():
     payload = {
@@ -61,3 +76,125 @@ def create_folder(folder:CreateFolderRequest , authorized : None =Depends(verify
     cursor.execute("INSERT INTO folders (title) VALUES (?)",(folder.title,))
     conn.commit()
     return {"message":"Folder created successfully"}
+
+@app.delete("/folders/{folder_id}")
+def delete_folder(folder_id: int, authorized: None = Depends(verify_token)):
+    cursor.execute("SELECT id FROM folders WHERE id = ?", (folder_id,))
+    existing = cursor.fetchone()
+
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Folder not found")
+
+    delete_vectors_for_folder(folder_id)
+
+    cursor.execute("DELETE FROM folders WHERE id = ?", (folder_id,))
+    conn.commit()
+    return {"message": "Folder deleted successfully"}
+
+@app.post("/folders/{folder_id}/upload")
+async def upload_file(
+    folder_id: int,
+    file: UploadFile = File(...),
+    authorized: None = Depends(verify_token)
+):
+    file_bytes = await file.read()
+    mime_type = file.content_type
+    file_type = get_file_type(file.filename)
+
+    response = extract_text(file_bytes, mime_type, file_type)
+
+    cursor.execute(
+        "INSERT INTO files(folder_id, file_name, content) VALUES (?, ?, ?)",
+        (folder_id, file.filename, response)
+    )
+    file_id = cursor.lastrowid
+
+    chunks = create_semantic_chunk(response)
+
+    for chunk_data in chunks:
+        text_for_embedding = f"""
+        Section: {chunk_data["section"]}
+        Title: {chunk_data["title"]}
+        Keywords: {", ".join(chunk_data["keywords"])}
+        Content:
+        {chunk_data["chunk_text"]}
+        """
+
+        embedding = generate_embedding(text_for_embedding)
+
+        cursor.execute(
+            """
+            INSERT INTO chunks (file_id, section, chunk_index, title, chunk_text, keywords)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (file_id, chunk_data["section"], chunk_data["chunk_index"],
+             chunk_data["title"], chunk_data["chunk_text"], ",".join(chunk_data["keywords"]))
+        )
+        chunk_id = cursor.lastrowid
+
+        payload = {
+            "folder_id": folder_id,
+            "file_id": file_id,
+            "section": chunk_data["section"],
+            "chunk_index": chunk_data["chunk_index"],
+            "title": chunk_data["title"],
+            "chunk_text": chunk_data["chunk_text"],
+            "keywords": chunk_data["keywords"],
+        }
+
+        save_vector(chunk_id=chunk_id, embedding=embedding, payload=payload)
+
+    conn.commit()
+
+    return {"file_id": file_id, "file_name": file.filename, "chunks_created": len(chunks)}
+
+@app.get("/folders/{folder_id}/files")
+def list_files(folder_id: int, authorized: None = Depends(verify_token)):
+    cursor.execute(
+        """
+        SELECT id, file_name, content, created_at
+        FROM files
+        WHERE folder_id = ?
+        ORDER BY created_at DESC
+        """,
+        (folder_id,)
+    )
+    rows = cursor.fetchall()
+
+    return [
+        {"id": row[0], "file_name": row[1], "content": row[2], "created_at": row[3]}
+        for row in rows
+    ]
+
+@app.get("/folders/{folder_id}/sessions")
+def list_sessions(folder_id: int, authorized: None = Depends(verify_token)):
+    sessions = chat_store.get_sessions(folder_id)
+    return [
+        {"id": s[0], "title": s[1], "created_at": s[2]}
+        for s in sessions
+    ]
+
+@app.post("/folders/{folder_id}/sessions")
+def create_new_session(folder_id: int, authorized: None = Depends(verify_token)):
+    session_id = chat_store.create_session(folder_id)
+    return {"id": session_id}
+
+@app.get("/sessions/{session_id}/messages")
+def list_messages(session_id: int, authorized: None = Depends(verify_token)):
+    return chat_store.get_messages(session_id)
+
+@app.post("/ask")
+def ask_question(payload: AskRequest, authorized: None = Depends(verify_token)):
+    recent_history = chat_store.get_messages(payload.session_id, limit=8)
+    standalone_question = contextualize_question(payload.question, recent_history)
+
+    question_embedding = generate_embedding(standalone_question)
+    vector_results = search_vector(question_embedding, top_k=10, folder_id=payload.folder_id)
+    keyword_results = keyword_search(payload.question, limit=20, folder_id=payload.folder_id)
+    merged_results = hybrid_merged(vector_results, keyword_results)
+
+    return {
+        "standalone_question": standalone_question,
+        "merged_count": len(merged_results),
+        "sample_titles": [r.get("title") for r in merged_results[:5]]
+    }
