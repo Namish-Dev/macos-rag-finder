@@ -28,3 +28,4 @@ notes.db
 __pycache__/
 
 qdrant_data
+.venv

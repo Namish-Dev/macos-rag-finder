@@ -2,6 +2,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, FieldCondition, Filter, MatchValue, VectorParams
 from qdrant_client.models import PointStruct
 
+
 client = QdrantClient(path="qdrant_data")
 
 if not client.collection_exists("notes"):

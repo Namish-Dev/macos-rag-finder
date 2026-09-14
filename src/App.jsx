@@ -1,4 +1,8 @@
 import React, { useState, useRef } from 'react';
+import LoginScreen from './LoginScreen';
+import { useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
+import FilePreviewPage from './FilePreviewPage';
 import { 
   Folder, 
   FileText, 
@@ -51,6 +55,7 @@ const initialFileSystem = {
 
 export default function App() {
   const [fileSystem, setFileSystem] = useState(initialFileSystem);
+  const [token, setToken] = useState(null);
   const [pathStack, setPathStack] = useState(['root']);
   const [selectedItemId, setSelectedItemId] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -62,10 +67,40 @@ export default function App() {
   const [isFileModalOpen, setIsFileModalOpen] = useState(false);
   const [newFileName, setNewFileName] = useState('');
   const [newFileContent, setNewFileContent] = useState('');
+  const [filesByFolder, setFilesByFolder] = useState({});
   
   const [previewFile, setPreviewFile] = useState(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [dropErrorMessage, setDropErrorMessage] = useState('');
+
+  const [folders, setFolders] = useState([]);
+
+  const fetchFolders = () => {
+  fetch('http://127.0.0.1:8000/folders', {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+    .then((res) => res.json())
+    .then((data) => setFolders(data));
+};
+
+useEffect(() => {
+  if (!token) return;
+  fetchFolders();
+}, [token]);
+
+
+
+useEffect(() => {
+  setFileSystem((prev) => ({
+    ...prev,
+    children: folders.map((folder) => ({
+      id: folder.id,
+      name: folder.title,
+      type: 'folder',
+      children: [],
+    })),
+  }));
+}, [folders]);
 
   const fileInputRef = useRef(null);
 
@@ -116,10 +151,24 @@ export default function App() {
   };
 
   const handleOpenFolder = (folderId) => {
-    setPathStack([...pathStack, folderId]);
-    setSelectedItemId(null);
-    setSearchQuery('');
-  };
+  setPathStack([...pathStack, folderId]);
+  setSelectedItemId(null);
+  setSearchQuery('');
+  fetchFiles(folderId);
+};
+
+const fetchFiles = (folderId) => {
+  fetch(`http://127.0.0.1:8000/folders/${folderId}/files`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+    .then((res) => res.json())
+    .then((data) => {
+      setFilesByFolder((prev) => ({ ...prev, [folderId]: data }));
+    });
+};
+
+
+
 
   const handleBreadcrumbClick = (index) => {
     setPathStack(pathStack.slice(0, index + 1));
@@ -150,24 +199,22 @@ export default function App() {
 
   // Action: Create folder (allowed at root level)
   const handleCreateFolder = (e) => {
-    e.preventDefault();
-    if (!newFolderName.trim()) return;
+  e.preventDefault();
+  if (!newFolderName.trim()) return;
 
-    const newFolderObj = {
-      id: `folder-${Date.now()}`,
-      name: newFolderName.trim(),
-      type: 'folder',
-      children: []
-    };
-
-    updateActiveFolder(folder => ({
-      ...folder,
-      children: [...(folder.children || []), newFolderObj]
-    }));
-
+  fetch('http://127.0.0.1:8000/folders', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ title: newFolderName.trim() }),
+  }).then(() => {
+    fetchFolders();
     setNewFolderName('');
     setIsFolderModalOpen(false);
-  };
+  });
+};
 
   // Action: Create file (ONLY INSIDE A FOLDER)
   const handleCreateFile = (e) => {
@@ -200,17 +247,31 @@ export default function App() {
   };
 
   // Action: Delete item (file or folder)
-  const handleDeleteItem = (e, item) => {
-    if (e) e.stopPropagation();
-    
-    updateActiveFolder(folder => ({
-      ...folder,
-      children: (folder.children || []).filter(c => c.id !== item.id)
-    }));
+ const handleDeleteItem = (e, item) => {
+  if (e) e.stopPropagation();
 
-    if (selectedItemId === item.id) setSelectedItemId(null);
-    if (previewFile?.id === item.id) setPreviewFile(null);
-  };
+  if (item.type === 'folder') {
+    fetch(`http://127.0.0.1:8000/folders/${item.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    }).then(() => {
+      fetchFolders();
+    });
+  } else {
+    const realFileId = String(item.id).replace('file-', '');
+    const folderId = pathStack[pathStack.length - 1];
+
+    fetch(`http://127.0.0.1:8000/files/${realFileId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    }).then(() => {
+      fetchFiles(folderId);
+    });
+  }
+
+  if (selectedItemId === item.id) setSelectedItemId(null);
+  if (previewFile?.id === item.id) setPreviewFile(null);
+};
 
   // Drag and Drop
   const handleDragOver = (e) => {
@@ -256,42 +317,63 @@ export default function App() {
 
   // Browse local computer file upload -> automatically closes modal box on selection!
   const handleNativeFileUpload = (e) => {
-    if (isAtRoot) {
-      alert('A file cannot exist outside a folder! Please open a folder first.');
-      return;
-    }
+  if (isAtRoot) {
+    alert('A file cannot exist outside a folder! Please open a folder first.');
+    return;
+  }
 
-    if (e.target.files && e.target.files.length > 0) {
-      const files = Array.from(e.target.files);
-      files.forEach(file => {
-        const newFileObj = {
-          id: `file-${Date.now()}-${Math.random()}`,
-          name: file.name,
-          type: 'file',
-          size: `${(file.size / 1024).toFixed(1)} KB`,
-          content: `Imported ${file.name}`
-        };
-        updateActiveFolder(folder => ({
-          ...folder,
-          children: [...(folder.children || []), newFileObj]
-        }));
-      });
+  const files = e.target.files;
+  if (!files || files.length === 0) return;
 
-      // AUTO-CLOSE THE MODAL BOX IMMEDIATELY AFTER SELECTING LOCAL FILE
-      setIsFileModalOpen(false);
-      setNewFileName('');
-      setNewFileContent('');
-    }
-  };
+  const folderId = pathStack[pathStack.length - 1];
+  const file = files[0];
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  fetch(`http://127.0.0.1:8000/folders/${folderId}/upload`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  }).then(() => {
+    fetchFiles(folderId);
+    setIsFileModalOpen(false);
+  });
+};
+
+
+  const currentFolderId = pathStack[pathStack.length - 1];
+
+  const realFiles = (filesByFolder[currentFolderId] || []).map((file) => ({
+    id: `file-${file.id}`,
+    name: file.file_name,
+    type: 'file',
+    size: '',
+    content: file.content,
+  }));
+
+
 
   // Filter current folder items
-  const currentItems = (currentFolder.children || []).filter(item => 
-    item.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const currentItems = [...(currentFolder.children || []), ...realFiles].filter(item =>
+  item.name.toLowerCase().includes(searchQuery.toLowerCase())
+);
+
+  if (!token) {
+  return <LoginScreen onLoginSuccess={setToken} />;
+}
+
+  if (previewFile) {
+  return <FilePreviewPage file={previewFile} onBack={() => setPreviewFile(null)} />;
+}
 
   return (
+    
+    
     <div className="app-window">
+      
       {/* Hidden file input for system local file browsing */}
+      
       <input 
         type="file" 
         ref={fileInputRef} 
@@ -323,7 +405,12 @@ export default function App() {
               <div 
                 key={folder.id}
                 className={`sidebar-item ${isSelected ? 'active' : ''}`}
-                onClick={() => setPathStack(['root', folder.id])}
+                onClick={() => {
+  setPathStack(['root', folder.id]);
+  setSelectedItemId(null);
+  setSearchQuery('');
+  fetchFiles(folder.id);
+}}
               >
                 <Folder size={16} color="#3b82f6" fill="#dbeafe" />
                 <span>{folder.name}</span>
@@ -587,7 +674,7 @@ export default function App() {
       )}
 
       {/* Modal: File Preview */}
-      {previewFile && (
+      {/* {previewFile && (
         <div className="mac-modal-overlay" onClick={() => setPreviewFile(null)}>
           <div className="mac-modal-box" onClick={(e) => e.stopPropagation()}>
             <div className="mac-modal-title">
@@ -608,7 +695,7 @@ export default function App() {
               overflowY: 'auto',
               whiteSpace: 'pre-wrap'
             }}>
-              {previewFile.content || 'No text preview available.'}
+              <ReactMarkdown>{previewFile.content || 'No text preview available.'}</ReactMarkdown>
             </div>
 
             <div style={{ fontSize: '11px', color: '#888', marginBottom: '14px' }}>
@@ -631,8 +718,11 @@ export default function App() {
             </div>
           </div>
         </div>
-      )}
+      )} */}
 
     </div>
-  );
+    
+  
+);
+  
 }

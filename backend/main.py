@@ -9,18 +9,30 @@ from vector import delete_vectors_for_folder, save_vector
 from document_analyzer import get_file_type
 from extractor import extract_text
 from chunking.semantic_chunker import create_semantic_chunk
-from embedding import generate_embedding
+
+
 import chat_store
 from rag import contextualize_question, answer_question
 from vector import search_vector
 from retrieval import keyword_search, hybrid_merged
-from embedding import generate_embedding
+import time
+from embedding import generate_embedding, rerank, build_retrieval_text
+
+from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
 
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/")
 def read_root():
@@ -77,19 +89,44 @@ def create_folder(folder:CreateFolderRequest , authorized : None =Depends(verify
     conn.commit()
     return {"message":"Folder created successfully"}
 
+# @app.delete("/folders/{folder_id}")
+# def delete_folder(folder_id: int, authorized: None = Depends(verify_token)):
+#     cursor.execute("SELECT id FROM folders WHERE id = ?", (folder_id,))
+#     existing = cursor.fetchone()
+
+#     if existing is None:
+#         raise HTTPException(status_code=404, detail="Folder not found")
+
+#     delete_vectors_for_folder(folder_id)
+
+#     cursor.execute("DELETE FROM folders WHERE id = ?", (folder_id,))
+#     conn.commit()
+#     return {"message": "Folder deleted successfully"}
+
 @app.delete("/folders/{folder_id}")
 def delete_folder(folder_id: int, authorized: None = Depends(verify_token)):
     cursor.execute("SELECT id FROM folders WHERE id = ?", (folder_id,))
-    existing = cursor.fetchone()
-
-    if existing is None:
+    if not cursor.fetchone():
         raise HTTPException(status_code=404, detail="Folder not found")
 
     delete_vectors_for_folder(folder_id)
 
     cursor.execute("DELETE FROM folders WHERE id = ?", (folder_id,))
     conn.commit()
+
     return {"message": "Folder deleted successfully"}
+
+
+@app.delete("/files/{file_id}")
+def delete_file(file_id: int, authorized: None = Depends(verify_token)):
+    cursor.execute("SELECT id FROM files WHERE id = ?", (file_id,))
+    if not cursor.fetchone():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    cursor.execute("DELETE FROM files WHERE id = ?", (file_id,))
+    conn.commit()
+
+    return {"message": "File deleted successfully"}
 
 @app.post("/folders/{folder_id}/upload")
 async def upload_file(
@@ -186,15 +223,87 @@ def list_messages(session_id: int, authorized: None = Depends(verify_token)):
 @app.post("/ask")
 def ask_question(payload: AskRequest, authorized: None = Depends(verify_token)):
     recent_history = chat_store.get_messages(payload.session_id, limit=8)
-    standalone_question = contextualize_question(payload.question, recent_history)
 
+    t0 = time.time()
+    standalone_question = contextualize_question(payload.question, recent_history)
+    print(f"contextualize_question took {time.time() - t0:.2f}s")
+
+    t0 = time.time()
     question_embedding = generate_embedding(standalone_question)
-    vector_results = search_vector(question_embedding, top_k=10, folder_id=payload.folder_id)
+    print(f"generate_embedding took {time.time() - t0:.2f}s")
+
+    t0 = time.time()
+    vector_results = search_vector(question_embedding, top_k=20, folder_id=payload.folder_id)
     keyword_results = keyword_search(payload.question, limit=20, folder_id=payload.folder_id)
     merged_results = hybrid_merged(vector_results, keyword_results)
+    print(f"retrieval + merge took {time.time() - t0:.2f}s")
+
+    t0 = time.time()
+    reranked = rerank(standalone_question, merged_results)
+    print(f"rerank took {time.time() - t0:.2f}s")
+
+    top_chunks = reranked[:5]
+
+    context = ""
+    for i, result in enumerate(top_chunks, start=1):
+        context += f"""
+Chunk {i}
+
+{build_retrieval_text(result)}
+
+--------------------------------
+"""
+
+        rag_prompt = f"""You are an AI assistant that answers questions using the provided notes.
+
+=========================
+Retrieved Notes
+=========================
+
+{context}
+
+=========================
+Question
+=========================
+
+{payload.question}
+
+=========================
+Rules
+=========================
+
+1. Answer only from the notes.
+2. If the answer isn't available, say so.
+3. Don't hallucinate.
+4. Be concise.
+5. Include code when useful.
+"""
+
+    # t0 = time.time()
+    # answer = answer_question(rag_prompt)
+    # print(f"answer_question took {time.time() - t0:.2f}s")
+
+    # return {
+    #     "answer": answer,
+    #     "standalone_question": standalone_question,
+    #     "top_chunks": [
+    #         {"title": r.get("title"), "section": r.get("section"), "rerank_score": r.get("rerank_score")}
+    #         for r in top_chunks
+    #     ]
+    # }
+
+    t0 = time.time()
+    answer = answer_question(rag_prompt)
+    print(f"answer_question took {time.time() - t0:.2f}s")
+
+    chat_store.save_message(payload.session_id, "user", payload.question)
+    chat_store.save_message(payload.session_id, "assistant", answer)
 
     return {
+        "answer": answer,
         "standalone_question": standalone_question,
-        "merged_count": len(merged_results),
-        "sample_titles": [r.get("title") for r in merged_results[:5]]
+        "top_chunks": [
+            {"title": r.get("title"), "section": r.get("section"), "rerank_score": r.get("rerank_score")}
+            for r in top_chunks
+        ]
     }

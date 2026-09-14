@@ -119,3 +119,10 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
 }
+
+
+.file-preview-content h1,
+.file-preview-content h2,
+.file-preview-content h3 {
+  color: #1d1d1f;
+}
