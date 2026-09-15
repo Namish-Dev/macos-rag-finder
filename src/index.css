@@ -126,3 +126,20 @@ code {
 .file-preview-content h3 {
   color: #1d1d1f;
 }
+.chat-message-content p {
+  margin: 0;
+}
+
+.chat-message-content h1,
+.chat-message-content h2,
+.chat-message-content h3 {
+  color: inherit;
+  font-size: 14px;
+  margin: 4px 0;
+}
+
+.chat-message-content code {
+  font-size: 12px;
+  padding: 1px 4px;
+}
+

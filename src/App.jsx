@@ -3,6 +3,7 @@ import LoginScreen from './LoginScreen';
 import { useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import FilePreviewPage from './FilePreviewPage';
+import ChatWidget from './ChatWidget';
 import { 
   Folder, 
   FileText, 
@@ -392,6 +393,8 @@ const fetchFiles = (folderId) => {
         <div className="titlebar-text">Finder</div>
       </div>
 
+
+      {!isAtRoot && <ChatWidget folderId={currentFolder.id} token={token} />}
       {/* Finder Container */}
       <div className="finder-container">
         
