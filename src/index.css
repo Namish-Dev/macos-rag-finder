@@ -143,3 +143,12 @@ code {
   padding: 1px 4px;
 }
 
+.chat-message-content pre {
+  overflow-x: auto;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  margin: 4px 0;
+  border-radius: 6px;
+  font-size: 11px;
+}

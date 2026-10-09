@@ -220,6 +220,15 @@ def create_new_session(folder_id: int, authorized: None = Depends(verify_token))
 def list_messages(session_id: int, authorized: None = Depends(verify_token)):
     return chat_store.get_messages(session_id)
 
+@app.delete("/sessions/{session_id}")
+def delete_chat_session(session_id: int, authorized: None = Depends(verify_token)):
+    cursor.execute("SELECT id FROM chat_sessions WHERE id = ?", (session_id,))
+    if not cursor.fetchone():
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    chat_store.delete_session(session_id)
+    return {"message": "Session deleted successfully"}
+
 @app.post("/ask")
 def ask_question(payload: AskRequest, authorized: None = Depends(verify_token)):
     recent_history = chat_store.get_messages(payload.session_id, limit=8)
@@ -307,3 +316,4 @@ Rules
             for r in top_chunks
         ]
     }
+
