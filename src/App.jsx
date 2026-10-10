@@ -1,57 +1,29 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import LoginScreen from './LoginScreen';
-import { useEffect } from 'react';
-import ReactMarkdown from 'react-markdown';
 import FilePreviewPage from './FilePreviewPage';
 import ChatWidget from './ChatWidget';
-import { 
-  Folder, 
-  FileText, 
-  ChevronRight, 
-  ArrowLeft, 
-  Plus, 
-  Search, 
-  UploadCloud, 
-  X, 
-  Trash2, 
-  FolderPlus, 
-  FilePlus, 
-  AlertTriangle 
+import { apiFetch } from './api';
+import {
+  Folder,
+  FileText,
+  ChevronRight,
+  ArrowLeft,
+  Plus,
+  Search,
+  UploadCloud,
+  Trash2,
+  FolderPlus,
+  FilePlus,
+  AlertTriangle
 } from 'lucide-react';
 import './App.css';
 
+// Only the root lives here now. Folders and files come from the backend.
 const initialFileSystem = {
   id: 'root',
   name: 'Home',
   type: 'folder',
-  children: [
-    {
-      id: 'folder-1',
-      name: 'Research Papers',
-      type: 'folder',
-      children: [
-        { id: 'file-1', name: 'Attention_Is_All_You_Need.pdf', type: 'file', size: '2.4 MB', content: 'PDF paper on transformer architectures.' },
-        { id: 'file-2', name: 'RAG_Original_Paper.pdf', type: 'file', size: '1.8 MB', content: 'Retrieval Augmented Generation paper.' },
-        { 
-          id: 'subfolder-1', 
-          name: 'Datasets', 
-          type: 'folder', 
-          children: [
-            { id: 'file-5', name: 'wiki_data.csv', type: 'file', size: '14.2 MB', content: 'Wikipedia embeddings dataset.' }
-          ]
-        }
-      ]
-    },
-    {
-      id: 'folder-2',
-      name: 'Personal Notes',
-      type: 'folder',
-      children: [
-        { id: 'file-3', name: 'Project_Ideas.txt', type: 'file', size: '12 KB', content: 'List of app ideas and features to build.' },
-        { id: 'file-4', name: 'Meeting_Minutes.txt', type: 'file', size: '8 KB', content: 'Discussion notes from weekly sync.' }
-      ]
-    }
-  ]
+  children: []
 };
 
 export default function App() {
@@ -60,52 +32,57 @@ export default function App() {
   const [pathStack, setPathStack] = useState(['root']);
   const [selectedItemId, setSelectedItemId] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
-  
+
   // Modals state
   const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
-  
   const [isFileModalOpen, setIsFileModalOpen] = useState(false);
-  const [newFileName, setNewFileName] = useState('');
-  const [newFileContent, setNewFileContent] = useState('');
+
   const [filesByFolder, setFilesByFolder] = useState({});
-  
   const [previewFile, setPreviewFile] = useState(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [dropErrorMessage, setDropErrorMessage] = useState('');
-
+  const [uploadingName, setUploadingName] = useState(null); // label while uploading, else null
   const [folders, setFolders] = useState([]);
-
-  const fetchFolders = () => {
-  fetch('http://127.0.0.1:8000/folders', {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-    .then((res) => res.json())
-    .then((data) => setFolders(data));
-};
-
-useEffect(() => {
-  if (!token) return;
-  fetchFolders();
-}, [token]);
-
-
-
-useEffect(() => {
-  setFileSystem((prev) => ({
-    ...prev,
-    children: folders.map((folder) => ({
-      id: folder.id,
-      name: folder.title,
-      type: 'folder',
-      children: [],
-    })),
-  }));
-}, [folders]);
 
   const fileInputRef = useRef(null);
 
-  // Helper: Traverse to active folder based on pathStack
+  // ---------- Backend fetches ----------
+
+  const fetchFolders = () => {
+    apiFetch(token, '/folders')
+      .then((res) => res.json())
+      .then((data) => setFolders(data));
+  };
+
+  const fetchFiles = (folderId) => {
+    apiFetch(token, `/folders/${folderId}/files`)
+      .then((res) => res.json())
+      .then((data) => {
+        setFilesByFolder((prev) => ({ ...prev, [folderId]: data }));
+      });
+  };
+
+  useEffect(() => {
+    if (!token) return;
+    fetchFolders();
+  }, [token]);
+
+  // Translate the backend's flat folder list into the Finder UI's tree shape
+  useEffect(() => {
+    setFileSystem((prev) => ({
+      ...prev,
+      children: folders.map((folder) => ({
+        id: folder.id,
+        name: folder.title,
+        type: 'folder',
+        children: [],
+      })),
+    }));
+  }, [folders]);
+
+  // ---------- Navigation helpers ----------
+
   const getCurrentFolder = (fs, stack) => {
     let current = fs;
     for (let i = 1; i < stack.length; i++) {
@@ -118,7 +95,6 @@ useEffect(() => {
     return current;
   };
 
-  // Helper: Get path breadcrumbs
   const getBreadcrumbs = (fs, stack) => {
     const crumbs = [];
     let current = fs;
@@ -140,10 +116,8 @@ useEffect(() => {
   const breadcrumbs = getBreadcrumbs(fileSystem, pathStack);
   const isAtRoot = pathStack.length === 1;
 
-  // Root folder list for sidebar navigation
   const rootFolders = (fileSystem.children || []).filter(item => item.type === 'folder');
 
-  // Navigation actions
   const handleGoBack = () => {
     if (pathStack.length > 1) {
       setPathStack(pathStack.slice(0, -1));
@@ -152,129 +126,114 @@ useEffect(() => {
   };
 
   const handleOpenFolder = (folderId) => {
-  setPathStack([...pathStack, folderId]);
-  setSelectedItemId(null);
-  setSearchQuery('');
-  fetchFiles(folderId);
-};
-
-const fetchFiles = (folderId) => {
-  fetch(`http://127.0.0.1:8000/folders/${folderId}/files`, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-    .then((res) => res.json())
-    .then((data) => {
-      setFilesByFolder((prev) => ({ ...prev, [folderId]: data }));
-    });
-};
-
-
-
+    setPathStack([...pathStack, folderId]);
+    setSelectedItemId(null);
+    setSearchQuery('');
+    fetchFiles(folderId);
+  };
 
   const handleBreadcrumbClick = (index) => {
     setPathStack(pathStack.slice(0, index + 1));
     setSelectedItemId(null);
   };
 
-  /**
-   * Robust state updater that navigates down pathStack and mutates active target folder
-   */
-  const updateActiveFolder = (updateFn) => {
-    const traverse = (node, depth) => {
-      if (depth === pathStack.length - 1) {
-        return updateFn(node);
-      }
-      const nextFolderId = pathStack[depth + 1];
-      return {
-        ...node,
-        children: (node.children || []).map(child => {
-          if (child.id === nextFolderId && child.type === 'folder') {
-            return traverse(child, depth + 1);
-          }
-          return child;
-        })
-      };
-    };
-    setFileSystem(prev => traverse(prev, 0));
-  };
+  // ---------- Actions ----------
 
-  // Action: Create folder (allowed at root level)
   const handleCreateFolder = (e) => {
-  e.preventDefault();
-  if (!newFolderName.trim()) return;
-
-  fetch('http://127.0.0.1:8000/folders', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({ title: newFolderName.trim() }),
-  }).then(() => {
-    fetchFolders();
-    setNewFolderName('');
-    setIsFolderModalOpen(false);
-  });
-};
-
-  // Action: Create file (ONLY INSIDE A FOLDER)
-  const handleCreateFile = (e) => {
     e.preventDefault();
-    if (isAtRoot) {
-      alert('Files cannot be created outside of a folder. Please open a folder first.');
-      return;
-    }
+    if (!newFolderName.trim()) return;
 
-    if (!newFileName.trim()) return;
-    let finalName = newFileName.trim();
-    if (!finalName.includes('.')) finalName += '.txt';
-
-    const newFileObj = {
-      id: `file-${Date.now()}`,
-      name: finalName,
-      type: 'file',
-      size: `${Math.max(1, Math.round(newFileContent.length / 1024))} KB`,
-      content: newFileContent || 'File content.'
-    };
-
-    updateActiveFolder(folder => ({
-      ...folder,
-      children: [...(folder.children || []), newFileObj]
-    }));
-
-    setNewFileName('');
-    setNewFileContent('');
-    setIsFileModalOpen(false);
-  };
-
-  // Action: Delete item (file or folder)
- const handleDeleteItem = (e, item) => {
-  if (e) e.stopPropagation();
-
-  if (item.type === 'folder') {
-    fetch(`http://127.0.0.1:8000/folders/${item.id}`, {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
+    apiFetch(token, '/folders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: newFolderName.trim() }),
     }).then(() => {
       fetchFolders();
+      setNewFolderName('');
+      setIsFolderModalOpen(false);
     });
-  } else {
-    const realFileId = String(item.id).replace('file-', '');
+  };
+
+  const handleDeleteItem = (e, item) => {
+    if (e) e.stopPropagation();
+
+    if (item.type === 'folder') {
+      apiFetch(token, `/folders/${item.id}`, { method: 'DELETE' }).then(() => {
+        fetchFolders();
+      });
+    } else {
+      const realFileId = String(item.id).replace('file-', '');
+      const folderId = pathStack[pathStack.length - 1];
+
+      apiFetch(token, `/files/${realFileId}`, { method: 'DELETE' }).then(() => {
+        fetchFiles(folderId);
+      });
+    }
+
+    if (selectedItemId === item.id) setSelectedItemId(null);
+    if (previewFile?.id === item.id) setPreviewFile(null);
+  };
+
+  // Uploads one or many files, one at a time, to the folder that is open.
+  const uploadFiles = async (fileList) => {
+    if (isAtRoot) {
+      alert('A file cannot exist outside a folder! Please open a folder first.');
+      return;
+    }
+    if (uploadingName) return; // one batch at a time
+
+    const files = Array.from(fileList);
+    if (files.length === 0) return;
+
     const folderId = pathStack[pathStack.length - 1];
+    const failed = [];
 
-    fetch(`http://127.0.0.1:8000/files/${realFileId}`, {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
-    }).then(() => {
-      fetchFiles(folderId);
-    });
-  }
+    setIsFileModalOpen(false);
 
-  if (selectedItemId === item.id) setSelectedItemId(null);
-  if (previewFile?.id === item.id) setPreviewFile(null);
-};
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      setUploadingName(
+        files.length > 1
+          ? `"${file.name}" (${i + 1} of ${files.length})`
+          : `"${file.name}"`
+      );
 
-  // Drag and Drop
+      const formData = new FormData();
+      formData.append('file', file);
+
+      try {
+        const res = await apiFetch(token, `/folders/${folderId}/upload`, {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (res.ok) {
+          fetchFiles(folderId); // each file appears as soon as it finishes
+        } else {
+          const err = await res.json();
+          failed.push(`${file.name}: ${err.detail || 'Upload failed'}`);
+        }
+      } catch (err) {
+        failed.push(`${file.name}: could not reach the server`);
+      }
+    }
+
+    setUploadingName(null);
+
+    if (failed.length > 0) {
+      alert(`${failed.length} upload(s) failed:\n\n${failed.join('\n')}`);
+    }
+  };
+
+  // "Browse Computer..." picker
+  const handleNativeFileUpload = (e) => {
+    const files = Array.from(e.target.files || []); // copy BEFORE clearing the input
+    e.target.value = ''; // lets you pick the same files again later
+    uploadFiles(files);
+  };
+
+  // ---------- Drag and drop on the folder window ----------
+
   const handleDragOver = (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -284,6 +243,9 @@ const fetchFiles = (folderId) => {
   const handleDragLeave = (e) => {
     e.preventDefault();
     e.stopPropagation();
+    // Moving over a child element also fires "leave" - ignore that, only react
+    // when the cursor really leaves the folder window.
+    if (e.currentTarget.contains(e.relatedTarget)) return;
     setIsDraggingOver(false);
   };
 
@@ -299,89 +261,72 @@ const fetchFiles = (folderId) => {
     }
 
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      const files = Array.from(e.dataTransfer.files);
-      files.forEach(file => {
-        const newFileObj = {
-          id: `file-${Date.now()}-${Math.random()}`,
-          name: file.name,
-          type: 'file',
-          size: `${(file.size / 1024).toFixed(1)} KB`,
-          content: `Content from ${file.name}`
-        };
-        updateActiveFolder(folder => ({
-          ...folder,
-          children: [...(folder.children || []), newFileObj]
-        }));
-      });
+      uploadFiles(e.dataTransfer.files);
     }
   };
 
-  // Browse local computer file upload -> automatically closes modal box on selection!
-  const handleNativeFileUpload = (e) => {
-  if (isAtRoot) {
-    alert('A file cannot exist outside a folder! Please open a folder first.');
-    return;
-  }
-
-  const files = e.target.files;
-  if (!files || files.length === 0) return;
-
-  const folderId = pathStack[pathStack.length - 1];
-  const file = files[0];
-
-  const formData = new FormData();
-  formData.append('file', file);
-
-  fetch(`http://127.0.0.1:8000/folders/${folderId}/upload`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-    body: formData,
-  }).then(() => {
-    fetchFiles(folderId);
-    setIsFileModalOpen(false);
-  });
-};
-
+  // ---------- Items shown in the grid ----------
 
   const currentFolderId = pathStack[pathStack.length - 1];
 
   const realFiles = (filesByFolder[currentFolderId] || []).map((file) => ({
-    id: `file-${file.id}`,
+    id: `file-${file.id}`, // prefixed so it can never collide with a folder id
     name: file.file_name,
     type: 'file',
     size: '',
     content: file.content,
   }));
 
-
-
-  // Filter current folder items
   const currentItems = [...(currentFolder.children || []), ...realFiles].filter(item =>
-  item.name.toLowerCase().includes(searchQuery.toLowerCase())
-);
+    item.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  // ---------- Early returns (all hooks are above this line) ----------
 
   if (!token) {
-  return <LoginScreen onLoginSuccess={setToken} />;
-}
+    return <LoginScreen onLoginSuccess={setToken} />;
+  }
 
   if (previewFile) {
-  return <FilePreviewPage file={previewFile} onBack={() => setPreviewFile(null)} />;
-}
+    return <FilePreviewPage file={previewFile} onBack={() => setPreviewFile(null)} />;
+  }
 
   return (
-    
-    
     <div className="app-window">
-      
-      {/* Hidden file input for system local file browsing */}
-      
-      <input 
-        type="file" 
-        ref={fileInputRef} 
-        style={{ display: 'none' }} 
-        multiple 
+
+      {/* Hidden file input used by "Browse Computer..." */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        style={{ display: 'none' }}
+        multiple
         onChange={handleNativeFileUpload}
       />
+
+      {/* Upload progress pill */}
+      {uploadingName && (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: '24px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            backgroundColor: '#1d1d1f',
+            color: '#ffffff',
+            padding: '10px 16px',
+            borderRadius: '999px',
+            fontSize: '13px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            zIndex: 2000,
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+          }}
+        >
+          <div className="upload-spinner" />
+          Uploading and indexing {uploadingName}…
+        </div>
+      )}
 
       {/* macOS Window Header Titlebar */}
       <div className="macos-titlebar">
@@ -393,27 +338,27 @@ const fetchFiles = (folderId) => {
         <div className="titlebar-text">Finder</div>
       </div>
 
-
       {!isAtRoot && <ChatWidget folderId={currentFolder.id} token={token} />}
+
       {/* Finder Container */}
       <div className="finder-container">
-        
-        {/* Sidebar displaying actual folder names */}
+
+        {/* Sidebar */}
         <div className="finder-sidebar">
           <div className="sidebar-section-title">FAVORITES</div>
-          
+
           {rootFolders.map(folder => {
             const isSelected = pathStack.length > 1 && pathStack[1] === folder.id;
             return (
-              <div 
+              <div
                 key={folder.id}
                 className={`sidebar-item ${isSelected ? 'active' : ''}`}
                 onClick={() => {
-  setPathStack(['root', folder.id]);
-  setSelectedItemId(null);
-  setSearchQuery('');
-  fetchFiles(folder.id);
-}}
+                  setPathStack(['root', folder.id]);
+                  setSelectedItemId(null);
+                  setSearchQuery('');
+                  fetchFiles(folder.id);
+                }}
               >
                 <Folder size={16} color="#3b82f6" fill="#dbeafe" />
                 <span>{folder.name}</span>
@@ -422,8 +367,8 @@ const fetchFiles = (folderId) => {
           })}
         </div>
 
-        {/* Content View */}
-        <div 
+        {/* Content View (also the drop target for files) */}
+        <div
           className="finder-content"
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
@@ -432,8 +377,8 @@ const fetchFiles = (folderId) => {
           {/* Content Navbar */}
           <div className="content-navbar">
             <div className="nav-left-group">
-              <button 
-                className="nav-arrow-btn" 
+              <button
+                className="nav-arrow-btn"
                 onClick={handleGoBack}
                 disabled={isAtRoot}
                 title="Back"
@@ -441,12 +386,11 @@ const fetchFiles = (folderId) => {
                 <ArrowLeft size={16} />
               </button>
 
-              {/* Breadcrumb Path */}
               <div className="breadcrumb-container">
                 {breadcrumbs.map((folder, idx) => (
                   <React.Fragment key={folder.id}>
                     {idx > 0 && <span className="breadcrumb-sep"><ChevronRight size={12} /></span>}
-                    <span 
+                    <span
                       className={`breadcrumb-item ${idx === breadcrumbs.length - 1 ? 'active' : ''}`}
                       onClick={() => handleBreadcrumbClick(idx)}
                     >
@@ -460,10 +404,10 @@ const fetchFiles = (folderId) => {
             <div className="nav-right-group">
               <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
                 <Search size={12} color="#999999" style={{ position: 'absolute', left: '8px', pointerEvents: 'none' }} />
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   className="search-input-mac"
-                  placeholder="Search" 
+                  placeholder="Search"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
@@ -473,8 +417,7 @@ const fetchFiles = (folderId) => {
 
           {/* Grid Viewport */}
           <div className="finder-grid-viewport">
-            
-            {/* Warning banner if file creation attempted at root */}
+
             {dropErrorMessage && (
               <div className="root-restriction-banner">
                 <AlertTriangle size={16} />
@@ -483,10 +426,10 @@ const fetchFiles = (folderId) => {
             )}
 
             <div className="finder-grid">
-              
-              {/* 1. New Folder Card (ONLY rendered at Root level) */}
+
+              {/* New Folder card (only at Home) */}
               {isAtRoot && (
-                <div 
+                <div
                   className="finder-card"
                   onClick={() => setIsFolderModalOpen(true)}
                   title="Create a new folder"
@@ -503,12 +446,12 @@ const fetchFiles = (folderId) => {
                 </div>
               )}
 
-              {/* 2. New / Drop File Card (ONLY rendered inside a folder) */}
+              {/* Upload Files card (only inside a folder) */}
               {!isAtRoot && (
-                <div 
+                <div
                   className="finder-card"
                   onClick={() => setIsFileModalOpen(true)}
-                  title="Create or drop a new file inside this folder"
+                  title="Upload files into this folder"
                 >
                   <div className="icon-box">
                     <FileText size={52} color="#94a3b8" strokeDasharray="2 2" strokeWidth={1.5} fill="none" />
@@ -517,17 +460,17 @@ const fetchFiles = (folderId) => {
                     </div>
                   </div>
                   <span className="item-name" style={{ color: '#475569', fontWeight: 500 }}>
-                    New / Drop File
+                    Upload Files
                   </span>
                 </div>
               )}
 
-              {/* 3. Existing Items Grid */}
+              {/* Existing folders and files */}
               {currentItems.map((item) => {
                 const isSelected = selectedItemId === item.id;
 
                 return (
-                  <div 
+                  <div
                     key={item.id}
                     className={`finder-card ${isSelected ? 'selected' : ''}`}
                     onClick={() => setSelectedItemId(item.id)}
@@ -546,11 +489,10 @@ const fetchFiles = (folderId) => {
                         <FileText size={52} color="#64748b" fill="#f1f5f9" strokeWidth={1} />
                       )}
                     </div>
-                    
+
                     <span className="item-name">{item.name}</span>
 
-                    {/* Working Delete Button */}
-                    <button 
+                    <button
                       className="delete-btn"
                       onClick={(e) => handleDeleteItem(e, item)}
                       title="Delete item"
@@ -587,28 +529,25 @@ const fetchFiles = (folderId) => {
               <FolderPlus size={18} color="#3b82f6" />
               <span>New Folder</span>
             </div>
-            
+
             <form onSubmit={handleCreateFolder}>
-              <input 
-                type="text" 
-                className="mac-input" 
-                placeholder="Folder Name" 
+              <input
+                type="text"
+                className="mac-input"
+                placeholder="Folder Name"
                 value={newFolderName}
                 onChange={(e) => setNewFolderName(e.target.value)}
                 autoFocus
               />
               <div className="mac-btn-group">
-                <button 
-                  type="button" 
+                <button
+                  type="button"
                   className="mac-btn"
                   onClick={() => setIsFolderModalOpen(false)}
                 >
                   Cancel
                 </button>
-                <button 
-                  type="submit" 
-                  className="mac-btn primary"
-                >
+                <button type="submit" className="mac-btn primary">
                   Create
                 </button>
               </div>
@@ -617,115 +556,64 @@ const fetchFiles = (folderId) => {
         </div>
       )}
 
-      {/* Modal: New File (Only inside folder) */}
+      {/* Modal: Upload Files (only inside a folder) */}
       {isFileModalOpen && (
-        <div className="mac-modal-overlay" onClick={() => setIsFileModalOpen(false)}>
+        <div
+          className="mac-modal-overlay"
+          onClick={() => setIsFileModalOpen(false)}
+          // A file dropped outside the dashed box must not make the browser open it
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => e.preventDefault()}
+        >
           <div className="mac-modal-box" onClick={(e) => e.stopPropagation()}>
             <div className="mac-modal-title">
               <FilePlus size={18} color="#10b981" />
-              <span>New File in "{currentFolder.name}"</span>
+              <span>Upload to "{currentFolder.name}"</span>
             </div>
-            
-            <form onSubmit={handleCreateFile}>
-              <input 
-                type="text" 
-                className="mac-input" 
-                placeholder="File Name (e.g. notes.txt)" 
-                value={newFileName}
-                onChange={(e) => setNewFileName(e.target.value)}
-                autoFocus
-              />
-              <textarea 
-                className="mac-input" 
-                placeholder="File contents..." 
-                rows={3}
-                style={{ resize: 'vertical' }}
-                value={newFileContent}
-                onChange={(e) => setNewFileContent(e.target.value)}
-              />
 
-              <div style={{ marginBottom: '14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: '12px', color: '#64748b' }}>Upload local file:</span>
-                <button 
-                  type="button" 
-                  className="mac-btn"
-                  style={{ fontSize: '12px', padding: '4px 12px' }}
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  Browse Computer...
-                </button>
+            <div
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault();
+                uploadFiles(e.dataTransfer.files);
+              }}
+              style={{
+                border: '2px dashed #cbd5e1',
+                borderRadius: '10px',
+                padding: '32px 16px',
+                textAlign: 'center',
+                marginBottom: '14px',
+              }}
+            >
+              <UploadCloud size={32} color="#94a3b8" />
+              <div style={{ fontSize: '13px', color: '#475569', margin: '8px 0 12px' }}>
+                Drag and drop files here
               </div>
+              <button
+                type="button"
+                className="mac-btn"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                Browse Computer...
+              </button>
+              <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '10px' }}>
+                PDF, images, .txt and .md
+              </div>
+            </div>
 
-              <div className="mac-btn-group">
-                <button 
-                  type="button" 
-                  className="mac-btn"
-                  onClick={() => setIsFileModalOpen(false)}
-                >
-                  Cancel
-                </button>
-                <button 
-                  type="submit" 
-                  className="mac-btn primary"
-                >
-                  Create File
-                </button>
-              </div>
-            </form>
+            <div className="mac-btn-group">
+              <button
+                type="button"
+                className="mac-btn"
+                onClick={() => setIsFileModalOpen(false)}
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Modal: File Preview */}
-      {/* {previewFile && (
-        <div className="mac-modal-overlay" onClick={() => setPreviewFile(null)}>
-          <div className="mac-modal-box" onClick={(e) => e.stopPropagation()}>
-            <div className="mac-modal-title">
-              <FileText size={18} color="#64748b" />
-              <span>{previewFile.name}</span>
-            </div>
-
-            <div style={{
-              backgroundColor: '#f6f6f6',
-              border: '1px solid #e0e0e0',
-              borderRadius: '6px',
-              padding: '12px',
-              marginBottom: '14px',
-              fontFamily: 'monospace',
-              fontSize: '12px',
-              color: '#1d1d1f',
-              maxHeight: '160px',
-              overflowY: 'auto',
-              whiteSpace: 'pre-wrap'
-            }}>
-              <ReactMarkdown>{previewFile.content || 'No text preview available.'}</ReactMarkdown>
-            </div>
-
-            <div style={{ fontSize: '11px', color: '#888', marginBottom: '14px' }}>
-              Size: {previewFile.size || 'Unknown'}
-            </div>
-
-            <div className="mac-btn-group">
-              <button 
-                className="mac-btn danger"
-                onClick={(e) => handleDeleteItem(e, previewFile)}
-              >
-                Delete File
-              </button>
-              <button 
-                className="mac-btn"
-                onClick={() => setPreviewFile(null)}
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        </div>
-      )} */}
-
     </div>
-    
-  
-);
-  
+  );
 }

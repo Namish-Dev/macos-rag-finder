@@ -79,6 +79,8 @@ def extract_text(file_bytes, mime_type, file_type):
             return markdown
         else:
             return transcribe(file_bytes, mime_type)
+    elif file_type in ("text", "markdown"):
+        return file_bytes.decode("utf-8", errors="ignore")
 
 Prompt = ''' You are an expert note formatter.
 

@@ -128,25 +128,20 @@ def delete_file(file_id: int, authorized: None = Depends(verify_token)):
 
     return {"message": "File deleted successfully"}
 
-@app.post("/folders/{folder_id}/upload")
-async def upload_file(
-    folder_id: int,
-    file: UploadFile = File(...),
-    authorized: None = Depends(verify_token)
-):
-    file_bytes = await file.read()
-    mime_type = file.content_type
-    file_type = get_file_type(file.filename)
+class CreateFileRequest(BaseModel):
+    file_name: str
+    content: str
 
-    response = extract_text(file_bytes, mime_type, file_type)
 
+def index_document(folder_id: int, file_name: str, content: str):
+    """Save the file, chunk it, embed each chunk, store in SQLite + Qdrant."""
     cursor.execute(
         "INSERT INTO files(folder_id, file_name, content) VALUES (?, ?, ?)",
-        (folder_id, file.filename, response)
+        (folder_id, file_name, content)
     )
     file_id = cursor.lastrowid
 
-    chunks = create_semantic_chunk(response)
+    chunks = create_semantic_chunk(content)
 
     for chunk_data in chunks:
         text_for_embedding = f"""
@@ -182,8 +177,52 @@ async def upload_file(
         save_vector(chunk_id=chunk_id, embedding=embedding, payload=payload)
 
     conn.commit()
+    return file_id, len(chunks)
 
-    return {"file_id": file_id, "file_name": file.filename, "chunks_created": len(chunks)}
+@app.post("/folders/{folder_id}/upload")
+async def upload_file(
+    folder_id: int,
+    file: UploadFile = File(...),
+    authorized: None = Depends(verify_token)
+):
+    file_bytes = await file.read()
+    mime_type = file.content_type
+    file_type = get_file_type(file.filename)
+
+    if file_type not in ("image", "pdf", "text", "markdown"):
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: {file.filename}")
+
+    response = extract_text(file_bytes, mime_type, file_type)
+
+    if not response or not response.strip():
+        raise HTTPException(status_code=400, detail="No text could be extracted from this file")
+
+    file_id, chunk_count = index_document(folder_id, file.filename, response)
+
+    return {"file_id": file_id, "file_name": file.filename, "chunks_created": chunk_count}
+
+@app.post("/folders/{folder_id}/files")
+def create_text_file(
+    folder_id: int,
+    payload: CreateFileRequest,
+    authorized: None = Depends(verify_token)
+):
+    cursor.execute("SELECT id FROM folders WHERE id = ?", (folder_id,))
+    if not cursor.fetchone():
+        raise HTTPException(status_code=404, detail="Folder not found")
+
+    file_name = payload.file_name.strip()
+    if not file_name:
+        raise HTTPException(status_code=400, detail="File name is required")
+    if "." not in file_name:
+        file_name += ".txt"
+
+    if not payload.content.strip():
+        raise HTTPException(status_code=400, detail="File contents are empty")
+
+    file_id, chunk_count = index_document(folder_id, file_name, payload.content)
+
+    return {"file_id": file_id, "file_name": file_name, "chunks_created": chunk_count}
 
 @app.get("/folders/{folder_id}/files")
 def list_files(folder_id: int, authorized: None = Depends(verify_token)):
@@ -263,7 +302,7 @@ Chunk {i}
 --------------------------------
 """
 
-        rag_prompt = f"""You are an AI assistant that answers questions using the provided notes.
+    rag_prompt = f"""You are an AI assistant that answers questions using the provided notes.
 
 =========================
 Retrieved Notes

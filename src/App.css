@@ -476,3 +476,17 @@ textarea:focus {
 .mac-btn.danger:hover {
   background-color: #b91c1c;
 }
+
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.upload-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
